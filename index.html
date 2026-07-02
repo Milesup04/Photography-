@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shutter Mentor — Photo EXIF &amp; AI Critique</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📷</text></svg>" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="exifr.umd.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <h1>📷 Shutter Mentor</h1>
+    <p class="tagline">Upload a photo &rarr; see your camera settings &rarr; get a critique from an AI mentor in the style of a master photographer.</p>
+  </header>
+
+  <main>
+    <!-- Step 1: API key -->
+    <section class="card" id="key-section">
+      <h2><span class="step">1</span> Groq API Key</h2>
+      <p class="hint">
+        Free at <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>.
+        The key is stored only in your browser (localStorage) and sent only to Groq.
+      </p>
+      <div class="key-row">
+        <input type="password" id="api-key" placeholder="gsk_..." autocomplete="off" />
+        <button id="save-key" class="btn secondary">Save</button>
+      </div>
+      <p id="key-status" class="key-status"></p>
+    </section>
+
+    <!-- Step 2: Upload -->
+    <section class="card" id="upload-section">
+      <h2><span class="step">2</span> Upload Your Photo</h2>
+      <div id="drop-zone" class="drop-zone" tabindex="0">
+        <input type="file" id="file-input" accept="image/jpeg,image/png,image/tiff,image/heic,image/webp" hidden />
+        <div class="drop-inner">
+          <div class="drop-icon">🖼️</div>
+          <p><strong>Click to choose a photo</strong> or drag &amp; drop it here</p>
+          <p class="hint">JPEG straight from your camera or phone works best — editing/messaging apps often strip the camera settings.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Preview + EXIF -->
+    <section class="card hidden" id="result-section">
+      <div class="preview-wrap">
+        <img id="preview" alt="Uploaded photo preview" />
+      </div>
+
+      <h2>Camera Settings</h2>
+      <div class="exif-grid">
+        <div class="exif-tile">
+          <div class="exif-icon">🔘</div>
+          <div class="exif-label">Aperture</div>
+          <div class="exif-value" id="exif-aperture">—</div>
+        </div>
+        <div class="exif-tile">
+          <div class="exif-icon">💡</div>
+          <div class="exif-label">ISO</div>
+          <div class="exif-value" id="exif-iso">—</div>
+        </div>
+        <div class="exif-tile">
+          <div class="exif-icon">⏱️</div>
+          <div class="exif-label">Shutter Speed</div>
+          <div class="exif-value" id="exif-shutter">—</div>
+        </div>
+      </div>
+
+      <details id="more-exif">
+        <summary>More details</summary>
+        <table class="exif-table">
+          <tr><td>Camera</td><td id="exif-camera">—</td></tr>
+          <tr><td>Lens</td><td id="exif-lens">—</td></tr>
+          <tr><td>Focal length</td><td id="exif-focal">—</td></tr>
+          <tr><td>Exposure compensation</td><td id="exif-ev">—</td></tr>
+          <tr><td>Flash</td><td id="exif-flash">—</td></tr>
+          <tr><td>Date taken</td><td id="exif-date">—</td></tr>
+        </table>
+      </details>
+
+      <p id="exif-warning" class="warning hidden"></p>
+
+      <!-- Step 3: Style + critique -->
+      <h2><span class="step">3</span> Choose Your Mentor's Style</h2>
+      <div class="style-grid" id="style-grid"></div>
+
+      <button id="analyze-btn" class="btn primary">✨ Get AI Critique</button>
+
+      <div id="ai-section" class="hidden">
+        <h2 id="ai-heading">Your Critique</h2>
+        <div id="ai-status" class="ai-status hidden">
+          <span class="spinner"></span> Your mentor is studying the photo…
+        </div>
+        <div id="ai-output" class="ai-output"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Everything runs in your browser. Your photo is sent only to the Groq API for the critique.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
