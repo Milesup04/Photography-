@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: visit-logger
+    runtime: node
+    plan: free
+    rootDir: visit-logger
+    branch: claude/visit-logger-ip-tracking-i5qsjl
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ADMIN_KEY
+        sync: false
+      - key: NODE_VERSION
+        value: "22"
