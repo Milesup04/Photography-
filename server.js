@@ -149,6 +149,44 @@ async function lookupGeo(ip) {
   }
 }
 
+// Optional global webhook that receives every visit (in addition to any
+// per-link webhook). Handy if you want all links reporting to one place.
+const GLOBAL_WEBHOOK = process.env.WEBHOOK_URL || null;
+
+// POST a visit to a webhook URL. Formats a readable message for Discord and
+// Slack; sends a plain JSON payload to anything else. Best-effort.
+async function sendWebhook(url, visit) {
+  if (!url) return;
+  const location = [visit.city, visit.region, visit.country].filter(Boolean).join(", ") || "unknown";
+  const text = [
+    `New visit on "${visit.label || visit.code}"`,
+    `Time: ${visit.time}`,
+    `IP: ${visit.ip}`,
+    `Location: ${location}${visit.isp ? ` (${visit.isp})` : ""}`,
+    `Device: ${visit.device}`,
+    `Referrer: ${visit.referer || "—"}`,
+  ].join("\n");
+
+  let body;
+  if (/discord(app)?\.com\/api\/webhooks/i.test(url)) body = { content: text };
+  else if (/hooks\.slack\.com/i.test(url)) body = { text };
+  else body = { event: "visit", location, ...visit };
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+  } catch {
+    // Best-effort; a failed webhook never affects the visitor.
+  }
+}
+
 app.use(express.static("public"));
 
 // ---- Home: create a tracking link (admin) ----------------------------------
@@ -165,6 +203,10 @@ app.get("/", requireAdmin, (req, res) => {
         <input name="redirectUrl" type="url" placeholder="https://example.com" />
         <small class="muted">Leave blank to show a simple "visit logged" page instead of redirecting.</small>
       </label>
+      <label>Webhook URL <span class="muted">(optional)</span>
+        <input name="webhookUrl" type="url" placeholder="https://discord.com/api/webhooks/..." />
+        <small class="muted">Each visit is also POSTed here as it happens. Works with Discord, Slack, or your own server.</small>
+      </label>
       <button type="submit">Create link</button>
     </form>
     <p><a href="/dashboard">→ View dashboard</a></p>
@@ -173,14 +215,19 @@ app.get("/", requireAdmin, (req, res) => {
 
 app.post("/links", requireAdmin, (req, res) => {
   const label = (req.body.label || "").trim().slice(0, 200);
-  let redirectUrl = (req.body.redirectUrl || "").trim().slice(0, 2000);
+  const redirectUrl = (req.body.redirectUrl || "").trim().slice(0, 2000);
+  const webhookUrl = (req.body.webhookUrl || "").trim().slice(0, 2000);
   if (redirectUrl && !/^https?:\/\//i.test(redirectUrl)) {
     return res.status(400).send(page("Error",
       `<h1>Invalid redirect URL</h1><p>It must start with http:// or https://.</p><p><a href="/">← Back</a></p>`));
   }
+  if (webhookUrl && !/^https?:\/\//i.test(webhookUrl)) {
+    return res.status(400).send(page("Error",
+      `<h1>Invalid webhook URL</h1><p>It must start with http:// or https://.</p><p><a href="/">← Back</a></p>`));
+  }
   let code;
   do { code = newCode(); } while (getLink(code));
-  createLink({ code, label, redirectUrl });
+  createLink({ code, label, redirectUrl, webhookUrl });
   res.redirect(`/dashboard/${code}`);
 });
 
@@ -251,17 +298,31 @@ app.get("/v/:code", (req, res) => {
   if (!link) return res.status(404).send(page("Not found", `<h1>Link not found</h1>`));
 
   const ip = clientIp(req);
-  const visitId = recordVisit({
-    code: link.code,
-    ip,
-    userAgent: req.get("user-agent"),
-    referer: req.get("referer"),
-  });
+  const userAgent = req.get("user-agent");
+  const referer = req.get("referer");
+  const visitId = recordVisit({ code: link.code, ip, userAgent, referer });
 
-  // Resolve location in the background so we don't delay the visitor's redirect.
-  lookupGeo(ip)
-    .then((geo) => geo && updateVisitGeo(visitId, geo))
-    .catch(() => {});
+  // Resolve location, then fire any webhooks — all in the background so nothing
+  // delays the visitor's redirect.
+  (async () => {
+    const geo = (await lookupGeo(ip)) || {};
+    if (geo.city || geo.region || geo.country || geo.isp) updateVisitGeo(visitId, geo);
+    const payload = {
+      code: link.code,
+      label: link.label,
+      time: new Date().toISOString(),
+      ip,
+      city: geo.city || null,
+      region: geo.region || null,
+      country: geo.country || null,
+      isp: geo.isp || null,
+      device: parseDevice(userAgent).label,
+      userAgent: userAgent || null,
+      referer: referer || null,
+    };
+    if (link.webhookUrl) await sendWebhook(link.webhookUrl, payload);
+    if (GLOBAL_WEBHOOK && GLOBAL_WEBHOOK !== link.webhookUrl) await sendWebhook(GLOBAL_WEBHOOK, payload);
+  })().catch(() => {});
 
   if (link.redirectUrl) return res.redirect(link.redirectUrl);
 

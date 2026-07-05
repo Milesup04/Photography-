@@ -34,6 +34,20 @@ Location is resolved in the background so it never slows the visitor's redirect,
 and it needs outbound internet — which your host (e.g. Render) has. If a lookup
 fails, the visit is still logged with the location left blank.
 
+## Get each visit pushed to you (webhooks)
+
+You don't have to keep checking the dashboard — each visit can be POSTed to a URL
+you control the moment it happens:
+
+- **Per link:** paste a **Webhook URL** when you create a link.
+- **All links:** set the `WEBHOOK_URL` environment variable to catch every visit.
+
+The payload includes time, IP, approximate location, device, and referrer.
+[Discord](https://support.discord.com/hc/en-us/articles/228383668) and Slack
+webhook URLs are auto-formatted into a readable message; any other URL receives a
+plain JSON POST you can handle on your own server. Delivery is best-effort and
+never affects the visitor.
+
 ## Run it locally
 
 ```bash

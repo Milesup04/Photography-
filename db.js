@@ -14,6 +14,7 @@ db.exec(`
     code        TEXT PRIMARY KEY,
     label       TEXT,
     redirectUrl TEXT,
+    webhookUrl  TEXT,
     createdAt   TEXT NOT NULL
   );
 
@@ -34,6 +35,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_visits_code ON visits(code);
 `);
 
+// Add the webhook column to link tables created before this feature existed.
+try {
+  db.exec("ALTER TABLE links ADD COLUMN webhookUrl TEXT");
+} catch {
+  // Column already exists — ignore.
+}
+
 // Add location columns to databases created before this feature existed.
 for (const col of ["city", "region", "country", "isp"]) {
   try {
@@ -45,7 +53,7 @@ for (const col of ["city", "region", "country", "isp"]) {
 
 const stmts = {
   createLink: db.prepare(
-    "INSERT INTO links (code, label, redirectUrl, createdAt) VALUES (?, ?, ?, ?)"
+    "INSERT INTO links (code, label, redirectUrl, webhookUrl, createdAt) VALUES (?, ?, ?, ?, ?)"
   ),
   getLink: db.prepare("SELECT * FROM links WHERE code = ?"),
   listLinks: db.prepare("SELECT * FROM links ORDER BY createdAt DESC"),
@@ -61,8 +69,10 @@ const stmts = {
   ),
 };
 
-export function createLink({ code, label, redirectUrl }) {
-  stmts.createLink.run(code, label || null, redirectUrl || null, new Date().toISOString());
+export function createLink({ code, label, redirectUrl, webhookUrl }) {
+  stmts.createLink.run(
+    code, label || null, redirectUrl || null, webhookUrl || null, new Date().toISOString()
+  );
   return stmts.getLink.get(code);
 }
 
