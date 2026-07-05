@@ -29,6 +29,23 @@ grab-anyone's-IP service.
      to a website by any browser, so it cannot be shown — nobody can get that
      from a plain link.
    - **Referrer** — the page the visitor came from, if the browser sends it.
+   - **More details** (from a tiny script on the visit page): preferred
+     **language**, **timezone** and local time, **screen & window size**, pixel
+     ratio, **CPU cores**, approximate **RAM**, touch support, **platform**, and
+     **connection type** (e.g. `4g`). Collected via `navigator.sendBeacon`, so it
+     never delays the redirect; visitors with JavaScript off are still logged and
+     redirected, just without these extras.
+
+### What a clicked link genuinely *cannot* get
+
+Don't believe tools that claim otherwise:
+
+- **WiFi network name (SSID)** — never exposed to a web page. Not possible.
+- **Exact/GPS location** — only via the browser's Geolocation API, which shows a
+  permission prompt the visitor must accept. No silent GPS. IP location stays coarse.
+- **Local/LAN IP** — modern browsers hide it (WebRTC returns `.local`), so it's not collected.
+- **Name, email, phone, passwords, keystrokes, files, other tabs, camera/mic** —
+  all blocked by the browser unless the visitor explicitly grants access.
 
 Location is resolved in the background so it never slows the visitor's redirect,
 and it needs outbound internet — which your host (e.g. Render) has. If a lookup

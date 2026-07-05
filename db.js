@@ -28,6 +28,8 @@ db.exec(`
     region     TEXT,
     country    TEXT,
     isp        TEXT,
+    language   TEXT,
+    clientInfo TEXT,
     createdAt  TEXT NOT NULL,
     FOREIGN KEY (code) REFERENCES links(code)
   );
@@ -42,8 +44,8 @@ try {
   // Column already exists — ignore.
 }
 
-// Add location columns to databases created before this feature existed.
-for (const col of ["city", "region", "country", "isp"]) {
+// Add location + client-detail columns to databases created before they existed.
+for (const col of ["city", "region", "country", "isp", "language", "clientInfo"]) {
   try {
     db.exec(`ALTER TABLE visits ADD COLUMN ${col} TEXT`);
   } catch {
@@ -59,10 +61,13 @@ const stmts = {
   listLinks: db.prepare("SELECT * FROM links ORDER BY createdAt DESC"),
   countVisits: db.prepare("SELECT COUNT(*) AS n FROM visits WHERE code = ?"),
   recordVisit: db.prepare(
-    "INSERT INTO visits (code, ip, userAgent, referer, createdAt) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO visits (code, ip, userAgent, referer, language, createdAt) VALUES (?, ?, ?, ?, ?, ?)"
   ),
   updateVisitGeo: db.prepare(
     "UPDATE visits SET city = ?, region = ?, country = ?, isp = ? WHERE id = ?"
+  ),
+  updateVisitClient: db.prepare(
+    "UPDATE visits SET clientInfo = ? WHERE id = ?"
   ),
   listVisits: db.prepare(
     "SELECT * FROM visits WHERE code = ? ORDER BY createdAt DESC LIMIT 500"
@@ -87,15 +92,19 @@ export function listLinks() {
   }));
 }
 
-export function recordVisit({ code, ip, userAgent, referer }) {
+export function recordVisit({ code, ip, userAgent, referer, language }) {
   const info = stmts.recordVisit.run(
-    code, ip || null, userAgent || null, referer || null, new Date().toISOString()
+    code, ip || null, userAgent || null, referer || null, language || null, new Date().toISOString()
   );
   return Number(info.lastInsertRowid);
 }
 
 export function updateVisitGeo(id, { city, region, country, isp }) {
   stmts.updateVisitGeo.run(city || null, region || null, country || null, isp || null, id);
+}
+
+export function updateVisitClient(id, clientInfoJson) {
+  stmts.updateVisitClient.run(clientInfoJson || null, id);
 }
 
 export function listVisits(code) {

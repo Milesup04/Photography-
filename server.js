@@ -1,6 +1,6 @@
 import express from "express";
 import crypto from "node:crypto";
-import { createLink, getLink, listLinks, recordVisit, updateVisitGeo, listVisits } from "./db.js";
+import { createLink, getLink, listLinks, recordVisit, updateVisitGeo, updateVisitClient, listVisits } from "./db.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,6 +10,8 @@ const PORT = process.env.PORT || 3000;
 // proxy's own address.
 app.set("trust proxy", true);
 app.use(express.urlencoded({ extended: false }));
+// Accept the small JSON payload of client-side details sent via sendBeacon.
+app.use(express.json({ type: ["application/json", "text/plain"], limit: "16kb" }));
 
 // ---- Admin key -------------------------------------------------------------
 // Creating links and viewing the dashboard require this key. If you don't set
@@ -266,6 +268,25 @@ app.get("/dashboard/:code", requireAdmin, (req, res) => {
     if (v.isp) out += `<br /><small class="muted">${esc(v.isp)}</small>`;
     return out;
   };
+  const details = (v) => {
+    let c = {};
+    try { c = v.clientInfo ? JSON.parse(v.clientInfo) : {}; } catch { c = {}; }
+    const items = [
+      ["Language", v.language ? v.language.split(",")[0] : c.languages?.[0]],
+      ["Timezone", c.timezone],
+      ["Local time", c.localTime],
+      ["Screen", c.screen && `${c.screen} (${c.dpr || 1}×)`],
+      ["Window", c.viewport],
+      ["CPU cores", c.cpuCores],
+      ["Memory", c.deviceMemory && `~${c.deviceMemory} GB`],
+      ["Touch points", c.touchPoints],
+      ["Platform", c.platform],
+      ["Connection", c.connection],
+    ].filter(([, val]) => val !== undefined && val !== null && val !== "");
+    if (!items.length) return '<span class="muted">—</span>';
+    const list = items.map(([k, val]) => `<div><span class="muted">${k}:</span> ${esc(val)}</div>`).join("");
+    return `<details><summary class="muted">${items.length} details</summary><div class="det">${list}</div></details>`;
+  };
   const rows = visits.length
     ? visits.map((v) => {
         const d = parseDevice(v.userAgent);
@@ -275,10 +296,11 @@ app.get("/dashboard/:code", requireAdmin, (req, res) => {
           <td><code>${esc(v.ip)}</code></td>
           <td>${location(v)}</td>
           <td title="${esc(v.userAgent || "")}">${d.icon} ${esc(d.label)}</td>
+          <td>${details(v)}</td>
           <td>${esc(v.referer || "—")}</td>
         </tr>`;
       }).join("")
-    : `<tr><td colspan="5" class="muted">No visits recorded yet.</td></tr>`;
+    : `<tr><td colspan="6" class="muted">No visits recorded yet.</td></tr>`;
   res.send(page(link.label || link.code, `
     <p><a href="/dashboard">← Dashboard</a></p>
     <h1>${esc(link.label || link.code)}</h1>
@@ -286,7 +308,7 @@ app.get("/dashboard/:code", requireAdmin, (req, res) => {
       <br /><small class="muted">Share this. Every visit appears below.
       ${link.redirectUrl ? `Visitors are redirected to <b>${esc(link.redirectUrl)}</b>.` : "Visitors see a simple confirmation page."}</small></p>
     <table>
-      <thead><tr><th>Time</th><th>IP address</th><th>Location</th><th>Device</th><th>Referrer</th></tr></thead>
+      <thead><tr><th>Time</th><th>IP address</th><th>Location</th><th>Device</th><th>More</th><th>Referrer</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `));
@@ -300,7 +322,8 @@ app.get("/v/:code", (req, res) => {
   const ip = clientIp(req);
   const userAgent = req.get("user-agent");
   const referer = req.get("referer");
-  const visitId = recordVisit({ code: link.code, ip, userAgent, referer });
+  const language = req.get("accept-language");
+  const visitId = recordVisit({ code: link.code, ip, userAgent, referer, language });
 
   // Resolve location, then fire any webhooks — all in the background so nothing
   // delays the visitor's redirect.
@@ -324,15 +347,75 @@ app.get("/v/:code", (req, res) => {
     if (GLOBAL_WEBHOOK && GLOBAL_WEBHOOK !== link.webhookUrl) await sendWebhook(GLOBAL_WEBHOOK, payload);
   })().catch(() => {});
 
-  if (link.redirectUrl) return res.redirect(link.redirectUrl);
+  // Render a tiny page that collects client-side details (screen, timezone,
+  // hardware, ...) and beacons them back, then redirects if configured. Using
+  // sendBeacon means the collection never delays the redirect.
+  const redirectJs = link.redirectUrl
+    ? `location.replace(${JSON.stringify(link.redirectUrl).replace(/</g, "\\u003c")});`
+    : "";
+  const noscript = link.redirectUrl
+    ? `<meta http-equiv="refresh" content="0;url=${esc(link.redirectUrl)}" />`
+    : "";
+  const bodyHtml = link.redirectUrl
+    ? `<div class="center"><p class="muted">Redirecting…</p></div>`
+    : `<div class="center">
+         <h1>✓ Your visit was logged</h1>
+         <p class="muted">This link records analytics (time, IP, location, and
+         device details) for each visit. No further action is needed.</p>
+       </div>`;
 
-  res.send(page("Visit logged", `
-    <div class="center">
-      <h1>✓ Your visit was logged</h1>
-      <p class="muted">This link records the time, IP address, and browser of each
-      visit for analytics. No further action is needed.</p>
-    </div>
-  `));
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${link.redirectUrl ? "Redirecting…" : "Visit logged"}</title>
+${noscript}<link rel="stylesheet" href="/style.css" /></head>
+<body><main>${bodyHtml}</main>
+<script>
+(function () {
+  try {
+    var n = navigator, s = screen, c = n.connection || {};
+    var data = {
+      languages: n.languages || (n.language ? [n.language] : []),
+      timezone: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone,
+      localTime: new Date().toString(),
+      screen: (s.width || "") + "×" + (s.height || ""),
+      dpr: window.devicePixelRatio,
+      viewport: window.innerWidth + "×" + window.innerHeight,
+      cpuCores: n.hardwareConcurrency,
+      deviceMemory: n.deviceMemory,
+      touchPoints: n.maxTouchPoints,
+      platform: (n.userAgentData && n.userAgentData.platform) || n.platform,
+      connection: c.effectiveType
+    };
+    var blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+    n.sendBeacon(${JSON.stringify("/vc/" + visitId)}, blob);
+  } catch (e) {}
+  ${redirectJs}
+})();
+</script></body></html>`);
+});
+
+// Receives the client-side details beacon and attaches them to the visit.
+app.post("/vc/:visitId", (req, res) => {
+  const id = Number(req.params.visitId);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).end();
+  const c = req.body && typeof req.body === "object" ? req.body : {};
+  const str = (x) => (x == null ? undefined : String(x).slice(0, 120));
+  const num = (x) => (typeof x === "number" && isFinite(x) ? x : undefined);
+  const clean = {
+    languages: Array.isArray(c.languages) ? c.languages.slice(0, 5).map((x) => String(x).slice(0, 20)) : undefined,
+    timezone: str(c.timezone),
+    localTime: str(c.localTime),
+    screen: str(c.screen),
+    dpr: num(c.dpr),
+    viewport: str(c.viewport),
+    cpuCores: num(c.cpuCores),
+    deviceMemory: num(c.deviceMemory),
+    touchPoints: num(c.touchPoints),
+    platform: str(c.platform),
+    connection: str(c.connection),
+  };
+  try { updateVisitClient(id, JSON.stringify(clean)); } catch {}
+  res.status(204).end();
 });
 
 app.get("/healthz", (req, res) => res.type("text").send("ok"));
