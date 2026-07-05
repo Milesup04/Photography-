@@ -16,7 +16,23 @@ grab-anyone's-IP service.
 2. Optionally give it a **redirect URL** so visitors get forwarded to a real page
    after the visit is logged (like a link shortener). Leave it blank and visitors
    see a simple "visit logged" confirmation page.
-3. Every visit is recorded and shown in your **dashboard**: time, IP, user-agent, referrer.
+3. Every visit is recorded and shown in your **dashboard**:
+   - **Time**
+   - **IP address** (captured server-side)
+   - **Approximate location** — city / region / country and the ISP, looked up
+     from the IP via the free [ipwho.is](https://ipwho.is) service. This is
+     coarse (often just the city or the ISP's location, sometimes far off), the
+     same level of detail any analytics tool shows. It is **not** a street address.
+   - **Device** — phone/computer, OS, and browser parsed from the user-agent
+     (e.g. `iPhone · iOS · Safari`, or an Android model like `SM-G991B · Chrome`).
+     Note: a device's *personal* name (e.g. "Sam's iPhone") is **never** exposed
+     to a website by any browser, so it cannot be shown — nobody can get that
+     from a plain link.
+   - **Referrer** — the page the visitor came from, if the browser sends it.
+
+Location is resolved in the background so it never slows the visitor's redirect,
+and it needs outbound internet — which your host (e.g. Render) has. If a lookup
+fails, the visit is still logged with the location left blank.
 
 ## Run it locally
 

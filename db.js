@@ -23,12 +23,25 @@ db.exec(`
     ip         TEXT,
     userAgent  TEXT,
     referer    TEXT,
+    city       TEXT,
+    region     TEXT,
+    country    TEXT,
+    isp        TEXT,
     createdAt  TEXT NOT NULL,
     FOREIGN KEY (code) REFERENCES links(code)
   );
 
   CREATE INDEX IF NOT EXISTS idx_visits_code ON visits(code);
 `);
+
+// Add location columns to databases created before this feature existed.
+for (const col of ["city", "region", "country", "isp"]) {
+  try {
+    db.exec(`ALTER TABLE visits ADD COLUMN ${col} TEXT`);
+  } catch {
+    // Column already exists — ignore.
+  }
+}
 
 const stmts = {
   createLink: db.prepare(
@@ -39,6 +52,9 @@ const stmts = {
   countVisits: db.prepare("SELECT COUNT(*) AS n FROM visits WHERE code = ?"),
   recordVisit: db.prepare(
     "INSERT INTO visits (code, ip, userAgent, referer, createdAt) VALUES (?, ?, ?, ?, ?)"
+  ),
+  updateVisitGeo: db.prepare(
+    "UPDATE visits SET city = ?, region = ?, country = ?, isp = ? WHERE id = ?"
   ),
   listVisits: db.prepare(
     "SELECT * FROM visits WHERE code = ? ORDER BY createdAt DESC LIMIT 500"
@@ -62,7 +78,14 @@ export function listLinks() {
 }
 
 export function recordVisit({ code, ip, userAgent, referer }) {
-  stmts.recordVisit.run(code, ip || null, userAgent || null, referer || null, new Date().toISOString());
+  const info = stmts.recordVisit.run(
+    code, ip || null, userAgent || null, referer || null, new Date().toISOString()
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateVisitGeo(id, { city, region, country, isp }) {
+  stmts.updateVisitGeo.run(city || null, region || null, country || null, isp || null, id);
 }
 
 export function listVisits(code) {

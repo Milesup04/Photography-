@@ -1,6 +1,6 @@
 import express from "express";
 import crypto from "node:crypto";
-import { createLink, getLink, listLinks, recordVisit, listVisits } from "./db.js";
+import { createLink, getLink, listLinks, recordVisit, updateVisitGeo, listVisits } from "./db.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,6 +49,37 @@ function newCode(len = 7) {
   return out;
 }
 
+// Best-effort device/OS/browser description from the user-agent string.
+// (A device's *personal* name, e.g. "Miles's iPhone", is never exposed to a
+// website by any browser, so it cannot be shown.)
+function parseDevice(ua) {
+  if (!ua) return { icon: "❔", label: "Unknown" };
+  let os = null, device = null, browser = null, icon = "💻";
+
+  if (/iPhone/.test(ua)) { device = "iPhone"; os = "iOS"; icon = "📱"; }
+  else if (/iPad/.test(ua)) { device = "iPad"; os = "iPadOS"; icon = "📱"; }
+  else if (/Android/.test(ua)) {
+    os = "Android"; icon = /Mobile/.test(ua) ? "📱" : "📱";
+    const m = ua.match(/Android[^;]*;\s*([^;)]+?)\s*(?:Build|\))/);
+    if (m && m[1] && !/^wv$/i.test(m[1].trim())) device = m[1].trim();
+  }
+  else if (/Windows NT 10/.test(ua)) os = "Windows 10/11";
+  else if (/Windows/.test(ua)) os = "Windows";
+  else if (/Mac OS X/.test(ua)) { os = "macOS"; icon = "🖥️"; }
+  else if (/CrOS/.test(ua)) os = "ChromeOS";
+  else if (/Linux/.test(ua)) os = "Linux";
+
+  if (/Edg\//.test(ua)) browser = "Edge";
+  else if (/OPR\//.test(ua) || /Opera/.test(ua)) browser = "Opera";
+  else if (/SamsungBrowser/.test(ua)) browser = "Samsung Internet";
+  else if (/Firefox\//.test(ua)) browser = "Firefox";
+  else if (/Chrome\//.test(ua)) browser = "Chrome";
+  else if (/Safari\//.test(ua)) browser = "Safari";
+
+  const label = [device, os, browser].filter(Boolean).join(" · ") || "Unknown device";
+  return { icon, label };
+}
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -74,6 +105,48 @@ function page(title, body) {
 // resolves X-Forwarded-For; fall back to the socket address just in case.
 function clientIp(req) {
   return req.ip || req.socket?.remoteAddress || "unknown";
+}
+
+// Private / loopback / reserved addresses can't be geolocated.
+function isPrivateIp(ip) {
+  if (!ip) return true;
+  const v = ip.replace(/^::ffff:/i, "");
+  return (
+    v === "::1" ||
+    /^127\./.test(v) ||
+    /^10\./.test(v) ||
+    /^192\.168\./.test(v) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(v) ||
+    /^169\.254\./.test(v) ||
+    /^f[cd]/i.test(v) ||
+    v === "unknown"
+  );
+}
+
+// Approximate location from IP via a free, keyless service (city/region/country
+// level — this is standard analytics data, not a precise address). Best-effort:
+// returns null on any failure so a visit is still logged without location.
+async function lookupGeo(ip) {
+  if (isPrivateIp(ip)) return null;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, {
+      signal: ctrl.signal,
+      headers: { "User-Agent": "visit-logger" },
+    });
+    clearTimeout(timer);
+    const j = await res.json();
+    if (!j || j.success === false) return null;
+    return {
+      city: j.city || null,
+      region: j.region || null,
+      country: j.country || null,
+      isp: j.connection?.isp || j.connection?.org || null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 app.use(express.static("public"));
@@ -139,15 +212,26 @@ app.get("/dashboard/:code", requireAdmin, (req, res) => {
   const visits = listVisits(link.code);
   const base = `${req.protocol}://${req.get("host")}`;
   const fullUrl = `${base}/v/${link.code}`;
+  const location = (v) => {
+    const parts = [v.city, v.region, v.country].filter(Boolean);
+    if (!parts.length) return '<span class="muted">—</span>';
+    let out = esc(parts.join(", "));
+    if (v.isp) out += `<br /><small class="muted">${esc(v.isp)}</small>`;
+    return out;
+  };
   const rows = visits.length
-    ? visits.map((v) => `
+    ? visits.map((v) => {
+        const d = parseDevice(v.userAgent);
+        return `
         <tr>
           <td>${esc(new Date(v.createdAt).toLocaleString())}</td>
           <td><code>${esc(v.ip)}</code></td>
-          <td class="ua">${esc(v.userAgent)}</td>
+          <td>${location(v)}</td>
+          <td title="${esc(v.userAgent || "")}">${d.icon} ${esc(d.label)}</td>
           <td>${esc(v.referer || "—")}</td>
-        </tr>`).join("")
-    : `<tr><td colspan="4" class="muted">No visits recorded yet.</td></tr>`;
+        </tr>`;
+      }).join("")
+    : `<tr><td colspan="5" class="muted">No visits recorded yet.</td></tr>`;
   res.send(page(link.label || link.code, `
     <p><a href="/dashboard">← Dashboard</a></p>
     <h1>${esc(link.label || link.code)}</h1>
@@ -155,7 +239,7 @@ app.get("/dashboard/:code", requireAdmin, (req, res) => {
       <br /><small class="muted">Share this. Every visit appears below.
       ${link.redirectUrl ? `Visitors are redirected to <b>${esc(link.redirectUrl)}</b>.` : "Visitors see a simple confirmation page."}</small></p>
     <table>
-      <thead><tr><th>Time</th><th>IP address</th><th>User-agent</th><th>Referrer</th></tr></thead>
+      <thead><tr><th>Time</th><th>IP address</th><th>Location</th><th>Device</th><th>Referrer</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `));
@@ -166,12 +250,18 @@ app.get("/v/:code", (req, res) => {
   const link = getLink(req.params.code);
   if (!link) return res.status(404).send(page("Not found", `<h1>Link not found</h1>`));
 
-  recordVisit({
+  const ip = clientIp(req);
+  const visitId = recordVisit({
     code: link.code,
-    ip: clientIp(req),
+    ip,
     userAgent: req.get("user-agent"),
     referer: req.get("referer"),
   });
+
+  // Resolve location in the background so we don't delay the visitor's redirect.
+  lookupGeo(ip)
+    .then((geo) => geo && updateVisitGeo(visitId, geo))
+    .catch(() => {});
 
   if (link.redirectUrl) return res.redirect(link.redirectUrl);
 
